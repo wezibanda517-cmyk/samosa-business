@@ -1,0 +1,488 @@
+import { useState, useEffect, useMemo } from "react";
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
+
+const C = {
+  bg: "#FFF8EE", dark: "#2C1A0E", amber: "#D4780A", amberLight: "#F59E0B",
+  gold: "#FEF3C7", green: "#15803D", greenLight: "#DCFCE7",
+  red: "#B91C1C", redLight: "#FEE2E2", border: "#E8D5B7", muted: "#92714A", white: "#FFFFFF",
+};
+
+const TABS = [
+  { key: "dashboard", label: "📊", name: "Dashboard" },
+  { key: "entry", label: "➕", name: "New Sale" },
+  { key: "summary", label: "📅", name: "Summary" },
+  { key: "charts", label: "📈", name: "Charts" },
+  { key: "history", label: "📋", name: "History" },
+];
+
+const BLANK = {
+  date: new Date().toISOString().split("T")[0],
+  samosasSold: "", pricePerSamosa: "",
+  flourCost: "", oilCost: "", meatVegCost: "", packagingCost: "", otherCosts: "", note: "",
+};
+
+const n = (v) => parseFloat(v) || 0;
+
+function calc(e) {
+  const revenue = n(e.samosasSold) * n(e.pricePerSamosa);
+  const capital = n(e.flourCost) + n(e.oilCost) + n(e.meatVegCost) + n(e.packagingCost) + n(e.otherCosts);
+  return { revenue, capital, profit: revenue - capital };
+}
+
+function fmt(v) {
+  if (v === null || v === undefined) return "—";
+  return `K ${Number(v).toFixed(2)}`;
+}
+
+function weekStart(dateStr) {
+  const d = new Date(dateStr);
+  const s = new Date(d); s.setDate(d.getDate() - d.getDay());
+  return s.toISOString().split("T")[0];
+}
+
+function monthLabel(dateStr) {
+  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-ZM", { year: "numeric", month: "short" });
+}
+function weekLabel(dateStr) {
+  return "Wk " + new Date(dateStr + "T00:00:00").toLocaleDateString("en-ZM", { month: "short", day: "numeric" });
+}
+
+function StatCard({ label, value, icon, color, bg, sub }) {
+  return (
+    <div style={{ background: bg || C.white, border: `1.5px solid ${C.border}`, borderRadius: 14, padding: "14px 15px", minWidth: 0, flex: 1 }}>
+      <div style={{ fontSize: 19 }}>{icon}</div>
+      <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, marginTop: 4 }}>{label}</div>
+      <div style={{ color: color || C.dark, fontSize: 18, fontWeight: 800, marginTop: 2 }}>{value}</div>
+      {sub && <div style={{ color: C.muted, fontSize: 10, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function ProfitBar({ profit, revenue, height = 10 }) {
+  const pct = revenue > 0 ? Math.min(Math.max((profit / revenue) * 100, -100), 100) : 0;
+  return (
+    <div style={{ background: C.border, borderRadius: 99, height, overflow: "hidden" }}>
+      <div style={{ height: "100%", borderRadius: 99, width: `${Math.abs(pct)}%`, background: profit >= 0 ? `linear-gradient(90deg,${C.amberLight},${C.green})` : `linear-gradient(90deg,${C.red},#F97316)`, transition: "width 0.4s" }} />
+    </div>
+  );
+}
+
+function InputRow({ label, field, type = "number", placeholder, form, onChange }) {
+  return (
+    <div style={{ marginBottom: 11 }}>
+      <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.muted, marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</label>
+      <input type={type} value={form[field]} onChange={e => onChange(field, e.target.value)} placeholder={placeholder || "0.00"}
+        style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, background: C.white, color: C.dark, outline: "none", boxSizing: "border-box" }} />
+    </div>
+  );
+}
+
+const ChartTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background: C.dark, borderRadius: 10, padding: "10px 14px", fontSize: 12 }}>
+      <div style={{ color: C.amberLight, fontWeight: 700, marginBottom: 5 }}>{label}</div>
+      {payload.map(p => <div key={p.name} style={{ color: p.color, marginBottom: 2 }}>{p.name}: {fmt(p.value)}</div>)}
+    </div>
+  );
+};
+
+export default function SamosaBusiness() {
+  const [entries, setEntries] = useState(() => {
+    try { const s = localStorage.getItem("samosa_v3"); return s ? JSON.parse(s) : []; } catch { return []; }
+  });
+  const [form, setForm] = useState(BLANK);
+  const [tab, setTab] = useState("dashboard");
+  const [summaryMode, setSummaryMode] = useState("weekly");
+  const [chartMetric, setChartMetric] = useState("all");
+  const [chartView, setChartView] = useState("bar");
+  const [editId, setEditId] = useState(null);
+  const [msg, setMsg] = useState(null);
+
+  // Save to localStorage on every change
+  useEffect(() => {
+    try { localStorage.setItem("samosa_v3", JSON.stringify(entries)); } catch {}
+  }, [entries]);
+
+  function flash(text, type = "ok") {
+    setMsg({ text, type });
+    setTimeout(() => setMsg(null), 2500);
+  }
+
+  const totals = useMemo(() => entries.reduce((acc, e) => {
+    const { revenue, capital, profit } = calc(e);
+    return { revenue: acc.revenue + revenue, capital: acc.capital + capital, profit: acc.profit + profit, samosas: acc.samosas + n(e.samosasSold) };
+  }, { revenue: 0, capital: 0, profit: 0, samosas: 0 }), [entries]);
+
+  const avgProfit = entries.length ? totals.profit / entries.length : 0;
+  const bestDay = useMemo(() => entries.reduce((best, e) => {
+    const p = calc(e).profit;
+    return p > (best ? calc(best).profit : -Infinity) ? e : best;
+  }, null), [entries]);
+
+  const liveCalc = calc(form);
+
+  const summaryGroups = useMemo(() => {
+    const groups = {};
+    [...entries].sort((a, b) => a.date.localeCompare(b.date)).forEach(e => {
+      const key = summaryMode === "weekly" ? weekStart(e.date) : e.date.slice(0, 7);
+      if (!groups[key]) groups[key] = { key, label: summaryMode === "weekly" ? weekLabel(weekStart(e.date)) : monthLabel(e.date), revenue: 0, capital: 0, profit: 0, samosas: 0, days: 0 };
+      const { revenue, capital, profit } = calc(e);
+      groups[key].revenue += revenue; groups[key].capital += capital;
+      groups[key].profit += profit; groups[key].samosas += n(e.samosasSold); groups[key].days++;
+    });
+    return Object.values(groups).reverse();
+  }, [entries, summaryMode]);
+
+  const chartData = useMemo(() => {
+    if (chartMetric === "summary") {
+      return summaryGroups.slice().reverse().slice(-10).map(g => ({
+        name: g.label, Revenue: +g.revenue.toFixed(2), Capital: +g.capital.toFixed(2), Profit: +g.profit.toFixed(2),
+      }));
+    }
+    return [...entries].sort((a, b) => a.date.localeCompare(b.date)).slice(-14).map(e => {
+      const { revenue, capital, profit } = calc(e);
+      return { name: e.date.slice(5), Revenue: +revenue.toFixed(2), Capital: +capital.toFixed(2), Profit: +profit.toFixed(2) };
+    });
+  }, [entries, chartMetric, summaryGroups]);
+
+  function handleChange(field, val) { setForm(f => ({ ...f, [field]: val })); }
+
+  function handleSave() {
+    if (!form.samosasSold || !form.pricePerSamosa) { flash("Enter samosas sold and price.", "err"); return; }
+    if (editId !== null) {
+      setEntries(p => p.map(e => e.id === editId ? { ...form, id: editId } : e));
+      setEditId(null); flash("Entry updated!");
+    } else {
+      setEntries(p => [{ ...form, id: Date.now() }, ...p]);
+      flash("Sale recorded!");
+    }
+    setForm({ ...BLANK, date: new Date().toISOString().split("T")[0] });
+    setTab("dashboard");
+  }
+
+  function handleEdit(entry) { setForm(entry); setEditId(entry.id); setTab("entry"); }
+  function handleDelete(id) {
+    if (window.confirm("Delete this entry?")) { setEntries(p => p.filter(e => e.id !== id)); flash("Entry deleted."); }
+  }
+  function handleCancel() { setForm({ ...BLANK, date: new Date().toISOString().split("T")[0] }); setEditId(null); setTab("dashboard"); }
+
+  function exportCSV() {
+    const header = "Date,Samosas Sold,Price/Samosa,Revenue,Flour,Oil,Meat/Veg,Packaging,Other Costs,Total Capital,Profit/Loss,Note";
+    const rows = [...entries].sort((a, b) => a.date.localeCompare(b.date)).map(e => {
+      const { revenue, capital, profit } = calc(e);
+      return [e.date, e.samosasSold, e.pricePerSamosa, revenue.toFixed(2), e.flourCost||0, e.oilCost||0, e.meatVegCost||0, e.packagingCost||0, e.otherCosts||0, capital.toFixed(2), profit.toFixed(2), `"${(e.note||"").replace(/"/g,"'")}"`].join(",");
+    });
+    const blob = new Blob([[header,...rows].join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "samosa_sales.csv"; a.click();
+    URL.revokeObjectURL(url); flash("CSV downloaded!");
+  }
+
+  const chartKeys = chartMetric === "profit" ? ["Profit"] : chartMetric === "revenue" ? ["Revenue","Capital"] : ["Revenue","Capital","Profit"];
+  const keyColors = { Revenue: C.amberLight, Capital: C.muted, Profit: C.green };
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+
+      {/* Header */}
+      <div style={{ background: C.dark, padding: "14px 16px 0" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 12 }}>
+          <span style={{ fontSize: 24 }}>🫓</span>
+          <div>
+            <div style={{ color: C.amberLight, fontWeight: 900, fontSize: 17 }}>Samosa Business</div>
+            <div style={{ color: "#B8996A", fontSize: 10 }}>Saved on this phone · Chipata</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 2 }}>
+          {TABS.map(t => (
+            <button key={t.key}
+              onClick={() => { setTab(t.key); if (t.key !== "entry") { setEditId(null); setForm({ ...BLANK, date: new Date().toISOString().split("T")[0] }); } }}
+              style={{ flex: 1, background: tab === t.key ? C.amber : "transparent", color: tab === t.key ? C.white : "#B8996A", border: "none", borderRadius: "8px 8px 0 0", padding: "9px 2px 7px", fontSize: tab === t.key ? 17 : 15, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+              {t.label}
+              {tab === t.key && <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: 0.5 }}>{t.name.toUpperCase()}</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: "16px 14px", maxWidth: 520, margin: "0 auto" }}>
+
+        {/* Toast */}
+        {msg && (
+          <div style={{ background: msg.type === "err" ? C.redLight : C.greenLight, color: msg.type === "err" ? C.red : C.green, border: `1px solid ${msg.type === "err" ? "#FECACA" : C.green}`, borderRadius: 10, padding: "9px 14px", marginBottom: 14, fontWeight: 600, fontSize: 13 }}>
+            {msg.type === "err" ? "⚠️" : "✅"} {msg.text}
+          </div>
+        )}
+
+        {/* ── DASHBOARD ── */}
+        {tab === "dashboard" && (
+          <div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9, marginBottom: 9 }}>
+              <StatCard label="Total Revenue" value={fmt(totals.revenue)} icon="💰" color={C.amber} />
+              <StatCard label="Total Capital" value={fmt(totals.capital)} icon="🛒" />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9, marginBottom: 13 }}>
+              <StatCard label={totals.profit >= 0 ? "Net Profit" : "Net Loss"} value={fmt(Math.abs(totals.profit))} icon={totals.profit >= 0 ? "📈" : "📉"} color={totals.profit >= 0 ? C.green : C.red} bg={totals.profit >= 0 ? C.greenLight : C.redLight} />
+              <StatCard label="Samosas Sold" value={totals.samosas.toLocaleString()} icon="🫓" sub={`${entries.length} days`} />
+            </div>
+            <div style={{ background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 14, padding: "14px 16px", marginBottom: 13 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+                <span style={{ fontWeight: 700, color: C.dark, fontSize: 13 }}>Overall Profit Margin</span>
+                <span style={{ fontWeight: 800, fontSize: 15, color: totals.profit >= 0 ? C.green : C.red }}>
+                  {totals.revenue > 0 ? ((totals.profit / totals.revenue) * 100).toFixed(1) + "%" : "—"}
+                </span>
+              </div>
+              <ProfitBar profit={totals.profit} revenue={totals.revenue} height={11} />
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 9, color: C.muted }}>
+                <span>Loss</span><span>Break Even</span><span>Profit</span>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9, marginBottom: 13 }}>
+              <StatCard label="Avg Daily Profit" value={fmt(avgProfit)} icon="📊" color={avgProfit >= 0 ? C.green : C.red} />
+              <StatCard label="Best Day" value={bestDay ? fmt(calc(bestDay).profit) : "—"} icon="🏆" color={C.amber} sub={bestDay?.date || ""} />
+            </div>
+            {entries.length === 0 ? (
+              <div style={{ textAlign: "center", color: C.muted, padding: "30px 20px" }}>
+                <div style={{ fontSize: 42 }}>🫓</div>
+                <div style={{ fontWeight: 700, marginTop: 8, fontSize: 14 }}>No sales yet</div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>Tap ➕ to record your first sale.</div>
+              </div>
+            ) : (
+              <div>
+                <div style={{ fontWeight: 700, color: C.dark, fontSize: 13, marginBottom: 9 }}>Recent Entries</div>
+                {[...entries].sort((a,b) => b.date.localeCompare(a.date)).slice(0,5).map(e => {
+                  const { revenue, capital, profit } = calc(e);
+                  return (
+                    <div key={e.id} style={{ background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 12, padding: "11px 13px", marginBottom: 8 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span style={{ fontWeight: 800, color: C.dark, fontSize: 13 }}>{e.date}</span>
+                        <span style={{ fontWeight: 800, color: profit >= 0 ? C.green : C.red, fontSize: 14 }}>{profit >= 0 ? "+" : ""}{fmt(profit)}</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 10, marginTop: 4, fontSize: 11, color: C.muted }}>
+                        <span>🫓 {e.samosasSold} pcs</span><span>Rev: {fmt(revenue)}</span><span>Cap: {fmt(capital)}</span>
+                      </div>
+                      {e.note && <div style={{ fontSize: 11, color: C.muted, marginTop: 3, fontStyle: "italic" }}>{e.note}</div>}
+                    </div>
+                  );
+                })}
+                {entries.length > 5 && (
+                  <button onClick={() => setTab("history")} style={{ width: "100%", background: "none", border: `1.5px dashed ${C.border}`, borderRadius: 10, padding: "9px", color: C.amber, fontWeight: 700, cursor: "pointer", fontSize: 12 }}>
+                    View all {entries.length} entries →
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── ENTRY ── */}
+        {tab === "entry" && (
+          <div>
+            <div style={{ fontWeight: 800, color: C.dark, fontSize: 15, marginBottom: 13 }}>{editId ? "✏️ Edit Entry" : "➕ Record Daily Sales"}</div>
+            <div style={{ background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 14, padding: "14px 13px", marginBottom: 12 }}>
+              <div style={{ fontWeight: 700, color: C.amber, fontSize: 11, marginBottom: 9, textTransform: "uppercase", letterSpacing: 1 }}>Sales Info</div>
+              <InputRow label="Date" field="date" type="date" form={form} onChange={handleChange} />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
+                <InputRow label="Samosas Sold" field="samosasSold" placeholder="e.g. 50" form={form} onChange={handleChange} />
+                <InputRow label="Price / Samosa (K)" field="pricePerSamosa" placeholder="e.g. 2.50" form={form} onChange={handleChange} />
+              </div>
+            </div>
+            <div style={{ background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 14, padding: "14px 13px", marginBottom: 12 }}>
+              <div style={{ fontWeight: 700, color: C.amber, fontSize: 11, marginBottom: 9, textTransform: "uppercase", letterSpacing: 1 }}>Capital / Costs (K)</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
+                <InputRow label="Flour" field="flourCost" form={form} onChange={handleChange} />
+                <InputRow label="Oil" field="oilCost" form={form} onChange={handleChange} />
+                <InputRow label="Meat / Veg" field="meatVegCost" form={form} onChange={handleChange} />
+                <InputRow label="Packaging" field="packagingCost" form={form} onChange={handleChange} />
+              </div>
+              <InputRow label="Other Costs" field="otherCosts" placeholder="Transport, spices, etc." form={form} onChange={handleChange} />
+            </div>
+            {(n(form.samosasSold) > 0 || n(form.flourCost) > 0) && (
+              <div style={{ background: C.gold, border: `1.5px solid ${C.amberLight}`, borderRadius: 14, padding: "12px 13px", marginBottom: 12 }}>
+                <div style={{ fontWeight: 700, color: C.dark, fontSize: 11, marginBottom: 7, textTransform: "uppercase", letterSpacing: 1 }}>Live Preview</div>
+                {[["Revenue", liveCalc.revenue, C.amber],["Total Capital", liveCalc.capital, C.dark]].map(([l,v,col]) => (
+                  <div key={l} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 13 }}>
+                    <span style={{ color: C.muted }}>{l}</span><span style={{ fontWeight: 700, color: col }}>{fmt(v)}</span>
+                  </div>
+                ))}
+                <div style={{ borderTop: `1.5px solid ${C.border}`, marginTop: 7, paddingTop: 7, display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ fontWeight: 800, color: C.dark, fontSize: 13 }}>{liveCalc.profit >= 0 ? "Profit" : "Loss"}</span>
+                  <span style={{ fontWeight: 900, fontSize: 16, color: liveCalc.profit >= 0 ? C.green : C.red }}>{liveCalc.profit >= 0 ? "+" : ""}{fmt(liveCalc.profit)}</span>
+                </div>
+              </div>
+            )}
+            <div style={{ marginBottom: 11 }}>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.muted, marginBottom: 3, textTransform: "uppercase" }}>Note (optional)</label>
+              <textarea value={form.note} onChange={e => handleChange("note", e.target.value)} placeholder="e.g. Market day, sold out by noon" rows={2}
+                style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, background: C.white, color: C.dark, boxSizing: "border-box", resize: "none" }} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
+              <button onClick={handleCancel} style={{ padding: "12px", background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 12, fontWeight: 700, color: C.muted, fontSize: 14, cursor: "pointer" }}>Cancel</button>
+              <button onClick={handleSave} style={{ padding: "12px", background: C.amber, border: "none", borderRadius: 12, fontWeight: 800, color: C.white, fontSize: 14, cursor: "pointer" }}>{editId ? "Update" : "Save Sale"}</button>
+            </div>
+          </div>
+        )}
+
+        {/* ── SUMMARY ── */}
+        {tab === "summary" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 13 }}>
+              <div style={{ fontWeight: 800, color: C.dark, fontSize: 15 }}>📅 Period Summary</div>
+              <div style={{ display: "flex", background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+                {["weekly","monthly"].map(m => (
+                  <button key={m} onClick={() => setSummaryMode(m)} style={{ padding: "7px 13px", background: summaryMode === m ? C.amber : "transparent", color: summaryMode === m ? C.white : C.muted, border: "none", fontWeight: 700, fontSize: 12, cursor: "pointer" }}>
+                    {m === "weekly" ? "Weekly" : "Monthly"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {summaryGroups.length === 0 ? (
+              <div style={{ textAlign: "center", color: C.muted, padding: "40px 20px" }}>
+                <div style={{ fontSize: 40 }}>📅</div><div style={{ fontWeight: 700, marginTop: 8 }}>No data yet</div>
+              </div>
+            ) : summaryGroups.map(g => (
+              <div key={g.key} style={{ background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 14, padding: "13px 15px", marginBottom: 11 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
+                  <div>
+                    <div style={{ fontWeight: 800, color: C.dark, fontSize: 14 }}>{g.label}</div>
+                    <div style={{ fontSize: 11, color: C.muted }}>🫓 {g.samosas} pcs · {g.days} day{g.days!==1?"s":""}</div>
+                  </div>
+                  <span style={{ fontWeight: 900, fontSize: 16, color: g.profit >= 0 ? C.green : C.red }}>{g.profit >= 0 ? "+" : ""}{fmt(g.profit)}</span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7, marginBottom: 9 }}>
+                  {[["Revenue",g.revenue,C.amber],["Capital",g.capital,C.muted],[g.profit>=0?"Profit":"Loss",Math.abs(g.profit),g.profit>=0?C.green:C.red]].map(([l,v,col]) => (
+                    <div key={l} style={{ background: C.bg, borderRadius: 9, padding: "7px 9px" }}>
+                      <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, textTransform: "uppercase" }}>{l}</div>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: col, marginTop: 2 }}>{fmt(v)}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.muted, marginBottom: 3 }}>
+                  <span>Margin</span><span>{g.revenue > 0 ? ((g.profit/g.revenue)*100).toFixed(1)+"%" : "—"}</span>
+                </div>
+                <ProfitBar profit={g.profit} revenue={g.revenue} height={6} />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── CHARTS ── */}
+        {tab === "charts" && (
+          <div>
+            <div style={{ fontWeight: 800, color: C.dark, fontSize: 15, marginBottom: 13 }}>📈 Charts</div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 13, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 10, overflow: "hidden", flex: 1 }}>
+                {[["all","All"],["revenue","Rev/Cap"],["profit","Profit"]].map(([k,l]) => (
+                  <button key={k} onClick={() => setChartMetric(k)} style={{ flex: 1, padding: "7px 4px", background: chartMetric===k?C.amber:"transparent", color: chartMetric===k?C.white:C.muted, border: "none", fontWeight: 700, fontSize: 11, cursor: "pointer" }}>{l}</button>
+                ))}
+              </div>
+              <div style={{ display: "flex", background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+                {[["bar","Bar"],["line","Line"]].map(([k,l]) => (
+                  <button key={k} onClick={() => setChartView(k)} style={{ padding: "7px 12px", background: chartView===k?C.amber:"transparent", color: chartView===k?C.white:C.muted, border: "none", fontWeight: 700, fontSize: 11, cursor: "pointer" }}>{l}</button>
+                ))}
+              </div>
+              <div style={{ display: "flex", background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+                {[["daily","Daily"],["summary","Period"]].map(([k,l]) => {
+                  const active = k==="summary" ? chartMetric==="summary" : chartMetric!=="summary";
+                  return <button key={k} onClick={() => setChartMetric(k==="summary"?"summary":"all")} style={{ padding: "7px 10px", background: active?C.amber:"transparent", color: active?C.white:C.muted, border: "none", fontWeight: 700, fontSize: 11, cursor: "pointer" }}>{l}</button>;
+                })}
+              </div>
+            </div>
+            {chartData.length === 0 ? (
+              <div style={{ textAlign: "center", color: C.muted, padding: "40px 20px" }}>
+                <div style={{ fontSize: 40 }}>📈</div><div style={{ fontWeight: 700, marginTop: 8 }}>No data to chart yet</div>
+              </div>
+            ) : (
+              <>
+                <div style={{ background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 14, padding: "14px 6px 10px" }}>
+                  <ResponsiveContainer width="100%" height={220}>
+                    {chartView === "bar" ? (
+                      <BarChart data={chartData} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                        <XAxis dataKey="name" tick={{ fontSize: 9, fill: C.muted }} />
+                        <YAxis tick={{ fontSize: 9, fill: C.muted }} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        {chartKeys.map(k => <Bar key={k} dataKey={k} fill={keyColors[k]} radius={[4,4,0,0]} />)}
+                      </BarChart>
+                    ) : (
+                      <LineChart data={chartData} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                        <XAxis dataKey="name" tick={{ fontSize: 9, fill: C.muted }} />
+                        <YAxis tick={{ fontSize: 9, fill: C.muted }} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        {chartKeys.map(k => <Line key={k} type="monotone" dataKey={k} stroke={keyColors[k]} strokeWidth={2} dot={{ r: 3 }} />)}
+                      </LineChart>
+                    )}
+                  </ResponsiveContainer>
+                </div>
+                {(() => {
+                  const tot = chartData.reduce((a,d) => ({r:a.r+d.Revenue,c:a.c+d.Capital,p:a.p+d.Profit}),{r:0,c:0,p:0});
+                  const div = chartMetric==="summary" ? chartData.length : 1;
+                  return (
+                    <div style={{ background: C.gold, border: `1.5px solid ${C.amberLight}`, borderRadius: 14, padding: "13px 14px", marginTop: 12 }}>
+                      <div style={{ fontWeight: 700, color: C.dark, fontSize: 11, marginBottom: 7, textTransform: "uppercase", letterSpacing: 1 }}>
+                        {chartMetric==="summary" ? "Average per Period" : "Totals (shown)"}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 7 }}>
+                        {[["Revenue",tot.r/div,C.amber],["Capital",tot.c/div,C.muted],[tot.p>=0?"Profit":"Loss",Math.abs(tot.p/div),tot.p>=0?C.green:C.red]].map(([l,v,col]) => (
+                          <div key={l} style={{ background: C.white, borderRadius: 9, padding: "8px 9px" }}>
+                            <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, textTransform: "uppercase" }}>{l}</div>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: col, marginTop: 2 }}>{fmt(v)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── HISTORY ── */}
+        {tab === "history" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 13 }}>
+              <div style={{ fontWeight: 800, color: C.dark, fontSize: 15 }}>📋 All Entries ({entries.length})</div>
+              <button onClick={exportCSV} style={{ background: C.gold, border: `1px solid ${C.amberLight}`, borderRadius: 8, padding: "7px 12px", color: C.amber, fontWeight: 700, fontSize: 12, cursor: "pointer" }}>⬇ CSV</button>
+            </div>
+            {entries.length === 0 ? (
+              <div style={{ textAlign: "center", color: C.muted, padding: "40px 20px" }}>
+                <div style={{ fontSize: 40 }}>📋</div><div style={{ fontWeight: 700, marginTop: 8 }}>No entries yet</div>
+              </div>
+            ) : [...entries].sort((a,b) => b.date.localeCompare(a.date)).map(e => {
+              const { revenue, capital, profit } = calc(e);
+              return (
+                <div key={e.id} style={{ background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 12, padding: "12px 13px", marginBottom: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div>
+                      <div style={{ fontWeight: 800, color: C.dark, fontSize: 13 }}>{e.date}</div>
+                      <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>🫓 {e.samosasSold} pcs @ K{e.pricePerSamosa}</div>
+                    </div>
+                    <span style={{ fontWeight: 900, color: profit >= 0 ? C.green : C.red, fontSize: 15 }}>{profit >= 0 ? "+" : ""}{fmt(profit)}</span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginTop: 9 }}>
+                    {[["Revenue",revenue,C.amber],["Capital",capital,C.muted],[profit>=0?"Profit":"Loss",Math.abs(profit),profit>=0?C.green:C.red]].map(([l,v,col]) => (
+                      <div key={l} style={{ background: C.bg, borderRadius: 8, padding: "7px 8px" }}>
+                        <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, textTransform: "uppercase" }}>{l}</div>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: col, marginTop: 1 }}>{fmt(v)}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {e.note && <div style={{ fontSize: 11, color: C.muted, marginTop: 6, fontStyle: "italic" }}>"{e.note}"</div>}
+                  <div style={{ display: "flex", gap: 7, marginTop: 9 }}>
+                    <button onClick={() => handleEdit(e)} style={{ flex: 1, padding: "7px", background: C.gold, border: `1px solid ${C.amberLight}`, borderRadius: 8, fontWeight: 700, color: C.amber, fontSize: 12, cursor: "pointer" }}>✏️ Edit</button>
+                    <button onClick={() => handleDelete(e.id)} style={{ flex: 1, padding: "7px", background: C.redLight, border: `1px solid #FECACA`, borderRadius: 8, fontWeight: 700, color: C.red, fontSize: 12, cursor: "pointer" }}>🗑️ Delete</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
