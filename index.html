@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Samosa Business 🫓</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#FFF8EE;font-family:system-ui,sans-serif;color:#2C1A0E;}
+button,input,textarea,select{font-family:inherit;}
+.hidden{display:none;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let entries = [];
+let currentTab = 'dashboard';
+let editId = null;
+let summaryMode = 'weekly';
+let chartMode = 'daily';
+
+try { entries = JSON.parse(localStorage.getItem('sb_v4') || '[]'); } catch(e){}
+
+function save() {
+  try { localStorage.setItem('sb_v4', JSON.stringify(entries)); } catch(e){}
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function n(v){ return parseFloat(v)||0; }
+function fmt(v){ return 'K '+Number(v||0).toFixed(2); }
+function calc(e){
+  const revenue = n(e.samosasSold)*n(e.pricePerSamosa);
+  const capital = n(e.flourCost)+n(e.oilCost)+n(e.meatVegCost)+n(e.packagingCost)+n(e.otherCosts);
+  return {revenue, capital, profit: revenue-capital};
+}
+function today(){ return new Date().toISOString().split('T')[0]; }
+function weekStart(d){
+  const dt=new Date(d); dt.setDate(dt.getDate()-dt.getDay());
+  return dt.toISOString().split('T')[0];
+}
+function monthKey(d){ return d.slice(0,7); }
+function periodLabel(key, mode){
+  if(mode==='monthly'){
+    const d=new Date(key+'-01T00:00:00');
+    return d.toLocaleDateString('en-ZM',{month:'short',year:'numeric'});
+  }
+  const d=new Date(key+'T00:00:00');
+  return 'Wk '+d.toLocaleDateString('en-ZM',{month:'short',day:'numeric'});
+}
+
+function getGroups(mode){
+  const groups={};
+  [...entries].sort((a,b)=>a.date.localeCompare(b.date)).forEach(e=>{
+    const key = mode==='weekly'?weekStart(e.date):monthKey(e.date);
+    if(!groups[key]) groups[key]={key,label:periodLabel(key,mode),revenue:0,capital:0,profit:0,samosas:0,days:0};
+    const c=calc(e);
+    groups[key].revenue+=c.revenue; groups[key].capital+=c.capital;
+    groups[key].profit+=c.profit; groups[key].samosas+=n(e.samosasSold); groups[key].days++;
+  });
+  return Object.values(groups).reverse();
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+function toast(msg, isErr){
+  let t=document.getElementById('toast');
+  if(!t){t=document.createElement('div');t.id='toast';document.body.appendChild(t);}
+  t.textContent=(isErr?'⚠️ ':'✅ ')+msg;
+  t.style.cssText='position:fixed;top:20px;left:50%;transform:translateX(-50%);padding:10px 20px;border-radius:10px;font-weight:700;font-size:14px;z-index:999;transition:opacity 0.3s;background:'+(isErr?'#FEE2E2':'#DCFCE7')+';color:'+(isErr?'#B91C1C':'#15803D')+';border:1px solid '+(isErr?'#FECACA':'#15803D');
+  t.style.opacity='1';
+  clearTimeout(t._t);
+  t._t=setTimeout(()=>t.style.opacity='0',2500);
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────
+function render(){
+  const totals = entries.reduce((a,e)=>{
+    const c=calc(e);
+    return{revenue:a.revenue+c.revenue,capital:a.capital+c.capital,profit:a.profit+c.profit,samosas:a.samosas+n(e.samosasSold)};
+  },{revenue:0,capital:0,profit:0,samosas:0});
+
+  const avgProfit = entries.length ? totals.profit/entries.length : 0;
+  const bestDay = entries.reduce((best,e)=>{ const p=calc(e).profit; return p>(best?calc(best).profit:-Infinity)?e:best; },null);
+  const margin = totals.revenue>0?((totals.profit/totals.revenue)*100).toFixed(1):null;
+
+  document.getElementById('app').innerHTML = `
+  <div style="min-height:100vh;background:#FFF8EE;">
+
+    <!-- Header -->
+    <div style="background:#2C1A0E;padding:14px 16px 0;">
+      <div style="display:flex;align-items:center;gap:10;margin-bottom:12px;">
+        <span style="font-size:24px;">🫓</span>
+        <div>
+          <div style="color:#F59E0B;font-weight:900;font-size:17px;">Samosa Business</div>
+          <div style="color:#B8996A;font-size:10px;">Chipata · Saved on this phone</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:2px;">
+        ${['dashboard','entry','summary','charts','history'].map((t,i)=>{
+          const icons=['📊','➕','📅','📈','📋'];
+          const names=['Home','Sale','Summary','Charts','History'];
+          const active=currentTab===t;
+          return `<button onclick="switchTab('${t}')" style="flex:1;background:${active?'#D4780A':'transparent'};color:${active?'#fff':'#B8996A'};border:none;border-radius:8px 8px 0 0;padding:9px 2px 7px;font-size:${active?17:15}px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:1px;">
+            ${icons[i]}${active?`<span style="font-size:8px;font-weight:700;">${names[i].toUpperCase()}</span>`:''}
+          </button>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <div style="padding:16px 14px;max-width:520px;margin:0 auto;">
+
+    ${currentTab==='dashboard'?`
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:9px;">
+        ${card('💰','Total Revenue',fmt(totals.revenue),'#D4780A')}
+        ${card('🛒','Total Capital',fmt(totals.capital),'#2C1A0E')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:13px;">
+        ${card(totals.profit>=0?'📈':'📉',totals.profit>=0?'Net Profit':'Net Loss',fmt(Math.abs(totals.profit)),totals.profit>=0?'#15803D':'#B91C1C',totals.profit>=0?'#DCFCE7':'#FEE2E2')}
+        ${card('🫓','Samosas Sold',totals.samosas.toLocaleString(),'#2C1A0E','#fff',entries.length+' days')}
+      </div>
+      <div style="background:#fff;border:1.5px solid #E8D5B7;border-radius:14px;padding:14px 16px;margin-bottom:13px;">
+        <div style="display:flex;justify-content:space-between;margin-bottom:7px;">
+          <span style="font-weight:700;font-size:13px;">Profit Margin</span>
+          <span style="font-weight:800;font-size:15px;color:${totals.profit>=0?'#15803D':'#B91C1C'};">${margin?margin+'%':'—'}</span>
+        </div>
+        ${profitBar(totals.profit,totals.revenue,11)}
+        <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:9px;color:#92714A;"><span>Loss</span><span>Break Even</span><span>Profit</span></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:13px;">
+        ${card('📊','Avg Daily Profit',fmt(avgProfit),avgProfit>=0?'#15803D':'#B91C1C')}
+        ${card('🏆','Best Day',bestDay?fmt(calc(bestDay).profit):'—','#D4780A','#fff',bestDay?bestDay.date:'')}
+      </div>
+      ${entries.length===0
+        ?`<div style="text-align:center;color:#92714A;padding:30px 20px;"><div style="font-size:42px;">🫓</div><div style="font-weight:700;margin-top:8px;">No sales yet</div><div style="font-size:12px;margin-top:4px;">Tap ➕ to record your first sale.</div></div>`
+        :`<div style="font-weight:700;font-size:13px;margin-bottom:9px;">Recent Entries</div>
+         ${[...entries].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5).map(e=>{
+           const c=calc(e);
+           return `<div style="background:#fff;border:1.5px solid #E8D5B7;border-radius:12px;padding:11px 13px;margin-bottom:8px;">
+             <div style="display:flex;justify-content:space-between;">
+               <span style="font-weight:800;font-size:13px;">${e.date}</span>
+               <span style="font-weight:800;color:${c.profit>=0?'#15803D':'#B91C1C'};font-size:14px;">${c.profit>=0?'+':''}${fmt(c.profit)}</span>
+             </div>
+             <div style="display:flex;gap:10px;margin-top:4px;font-size:11px;color:#92714A;">
+               <span>🫓 ${e.samosasSold} pcs</span><span>Rev: ${fmt(c.revenue)}</span><span>Cap: ${fmt(c.capital)}</span>
+             </div>
+             ${e.note?`<div style="font-size:11px;color:#92714A;margin-top:3px;font-style:italic;">${e.note}</div>`:''}
+           </div>`;
+         }).join('')}
+         ${entries.length>5?`<button onclick="switchTab('history')" style="width:100%;background:none;border:1.5px dashed #E8D5B7;border-radius:10px;padding:9px;color:#D4780A;font-weight:700;cursor:pointer;font-size:12px;">View all ${entries.length} entries →</button>`:''}`
+      }
+    `:currentTab==='entry'?`
+      <div style="font-weight:800;font-size:15px;margin-bottom:13px;">${editId?'✏️ Edit Entry':'➕ Record Daily Sales'}</div>
+      <div style="background:#fff;border:1.5px solid #E8D5B7;border-radius:14px;padding:14px 13px;margin-bottom:12px;">
+        <div style="font-weight:700;color:#D4780A;font-size:11px;margin-bottom:9px;text-transform:uppercase;letter-spacing:1px;">Sales Info</div>
+        ${field('date','Date','date')}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;">
+          ${field('samosasSold','Samosas Sold','number','e.g. 50')}
+          ${field('pricePerSamosa','Price / Samosa (K)','number','e.g. 2.50')}
+        </div>
+      </div>
+      <div style="background:#fff;border:1.5px solid #E8D5B7;border-radius:14px;padding:14px 13px;margin-bottom:12px;">
+        <div style="font-weight:700;color:#D4780A;font-size:11px;margin-bottom:9px;text-transform:uppercase;letter-spacing:1px;">Capital / Costs (K)</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;">
+          ${field('flourCost','Flour','number')}
+          ${field('oilCost','Oil','number')}
+          ${field('meatVegCost','Meat / Veg','number')}
+          ${field('packagingCost','Packaging','number')}
+        </div>
+        ${field('otherCosts','Other Costs','number','Transport, spices, etc.')}
+      </div>
+      <div id="livePreview"></div>
+      <div style="margin-bottom:11px;">
+        <label style="display:block;font-size:11px;font-weight:700;color:#92714A;margin-bottom:3px;text-transform:uppercase;">Note (optional)</label>
+        <textarea id="f_note" onchange="updateLive()" oninput="updateLive()" rows="2" style="width:100%;padding:10px 12px;border:1.5px solid #E8D5B7;border-radius:10px;font-size:13px;background:#fff;color:#2C1A0E;resize:none;">${getFormVal('note')}</textarea>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;">
+        <button onclick="cancelForm()" style="padding:12px;background:#fff;border:1.5px solid #E8D5B7;border-radius:12px;font-weight:700;color:#92714A;font-size:14px;cursor:pointer;">Cancel</button>
+        <button onclick="saveEntry()" style="padding:12px;background:#D4780A;border:none;border-radius:12px;font-weight:800;color:#fff;font-size:14px;cursor:pointer;">${editId?'Update':'Save Sale'}</button>
+      </div>
+    `:currentTab==='summary'?`
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:13px;">
+        <div style="font-weight:800;font-size:15px;">📅 Period Summary</div>
+        <div style="display:flex;background:#fff;border:1.5px solid #E8D5B7;border-radius:10px;overflow:hidden;">
+          <button onclick="setSummaryMode('weekly')" style="padding:7px 13px;background:${summaryMode==='weekly'?'#D4780A':'transparent'};color:${summaryMode==='weekly'?'#fff':'#92714A'};border:none;font-weight:700;font-size:12px;cursor:pointer;">Weekly</button>
+          <button onclick="setSummaryMode('monthly')" style="padding:7px 13px;background:${summaryMode==='monthly'?'#D4780A':'transparent'};color:${summaryMode==='monthly'?'#fff':'#92714A'};border:none;font-weight:700;font-size:12px;cursor:pointer;">Monthly</button>
+        </div>
+      </div>
+      ${(()=>{
+        const groups=getGroups(summaryMode);
+        if(!groups.length) return '<div style="text-align:center;color:#92714A;padding:40px 20px;"><div style="font-size:40px;">📅</div><div style="font-weight:700;margin-top:8px;">No data yet</div></div>';
+        return groups.map(g=>`
+          <div style="background:#fff;border:1.5px solid #E8D5B7;border-radius:14px;padding:13px 15px;margin-bottom:11px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;">
+              <div>
+                <div style="font-weight:800;font-size:14px;">${g.label}</div>
+                <div style="font-size:11px;color:#92714A;">🫓 ${g.samosas} pcs · ${g.days} day${g.days!==1?'s':''}</div>
+              </div>
+              <span style="font-weight:900;font-size:16px;color:${g.profit>=0?'#15803D':'#B91C1C'};">${g.profit>=0?'+':''}${fmt(g.profit)}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin-bottom:9px;">
+              ${miniStat('Revenue',fmt(g.revenue),'#D4780A')}
+              ${miniStat('Capital',fmt(g.capital),'#92714A')}
+              ${miniStat(g.profit>=0?'Profit':'Loss',fmt(Math.abs(g.profit)),g.profit>=0?'#15803D':'#B91C1C')}
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:#92714A;margin-bottom:3px;">
+              <span>Margin</span><span>${g.revenue>0?((g.profit/g.revenue)*100).toFixed(1)+'%':'—'}</span>
+            </div>
+            ${profitBar(g.profit,g.revenue,6)}
+          </div>`).join('');
+      })()}
+    `:currentTab==='charts'?`
+      <div style="font-weight:800;font-size:15px;margin-bottom:13px;">📈 Charts</div>
+      <div style="display:flex;gap:8px;margin-bottom:13px;">
+        <div style="display:flex;background:#fff;border:1.5px solid #E8D5B7;border-radius:10px;overflow:hidden;">
+          <button onclick="setChartMode('daily')" style="padding:7px 12px;background:${chartMode==='daily'?'#D4780A':'transparent'};color:${chartMode==='daily'?'#fff':'#92714A'};border:none;font-weight:700;font-size:11px;cursor:pointer;">Daily</button>
+          <button onclick="setChartMode('weekly')" style="padding:7px 12px;background:${chartMode==='weekly'?'#D4780A':'transparent'};color:${chartMode==='weekly'?'#fff':'#92714A'};border:none;font-weight:700;font-size:11px;cursor:pointer;">Weekly</button>
+          <button onclick="setChartMode('monthly')" style="padding:7px 12px;background:${chartMode==='monthly'?'#D4780A':'transparent'};color:${chartMode==='monthly'?'#fff':'#92714A'};border:none;font-weight:700;font-size:11px;cursor:pointer;">Monthly</button>
+        </div>
+      </div>
+      ${(()=>{
+        let data=[];
+        if(chartMode==='daily'){
+          data=[...entries].sort((a,b)=>a.date.localeCompare(b.date)).slice(-10).map(e=>{const c=calc(e);return{label:e.date.slice(5),revenue:c.revenue,capital:c.capital,profit:c.profit};});
+        } else {
+          data=getGroups(chartMode).slice().reverse().slice(-8).map(g=>({label:g.label,revenue:g.revenue,capital:g.capital,profit:g.profit}));
+        }
+        if(!data.length) return '<div style="text-align:center;color:#92714A;padding:40px 20px;"><div style="font-size:40px;">📈</div><div style="font-weight:700;margin-top:8px;">No data yet</div></div>';
+        const maxVal=Math.max(...data.map(d=>Math.max(d.revenue,d.capital,Math.abs(d.profit))),1);
+        return `
+          <div style="background:#fff;border:1.5px solid #E8D5B7;border-radius:14px;padding:14px 12px 10px;">
+            <div style="display:flex;gap:10px;margin-bottom:8px;font-size:10px;">
+              ${['#F59E0B','#92714A','#15803D'].map((c,i)=>`<div style="display:flex;align-items:center;gap:4px;"><div style="width:10px;height:10px;border-radius:2px;background:${c};"></div>${['Revenue','Capital','Profit'][i]}</div>`).join('')}
+            </div>
+            <div style="display:flex;gap:4px;align-items:flex-end;height:160px;overflow-x:auto;">
+              ${data.map(d=>`
+                <div style="display:flex;flex-direction:column;align-items:center;gap:2px;min-width:${Math.max(30,280/data.length)}px;flex:1;">
+                  <div style="display:flex;gap:2px;align-items:flex-end;height:140px;width:100%;">
+                    ${[{v:d.revenue,c:'#F59E0B'},{v:d.capital,c:'#92714A'},{v:d.profit,c:d.profit>=0?'#15803D':'#B91C1C'}].map(b=>`
+                      <div style="flex:1;background:${b.c};border-radius:3px 3px 0 0;height:${Math.max(2,(Math.abs(b.v)/maxVal)*130)}px;opacity:0.9;" title="${fmt(b.v)}"></div>
+                    `).join('')}
+                  </div>
+                  <div style="font-size:8px;color:#92714A;text-align:center;width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${d.label}</div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+          <div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:14px;padding:13px 14px;margin-top:12px;">
+            <div style="font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:7px;">Period Totals</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;">
+              ${(()=>{const tot=data.reduce((a,d)=>({r:a.r+d.revenue,c:a.c+d.capital,p:a.p+d.profit}),{r:0,c:0,p:0});return[['Revenue',tot.r,'#D4780A'],['Capital',tot.c,'#92714A'],[tot.p>=0?'Profit':'Loss',Math.abs(tot.p),tot.p>=0?'#15803D':'#B91C1C']].map(([l,v,col])=>`<div style="background:#fff;border-radius:9px;padding:8px 9px;"><div style="font-size:9px;color:#92714A;font-weight:700;text-transform:uppercase;">${l}</div><div style="font-size:12px;font-weight:800;color:${col};margin-top:2px;">${fmt(v)}</div></div>`).join('');})()}
+            </div>
+          </div>`;
+      })()}
+    `:currentTab==='history'?`
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:13px;">
+        <div style="font-weight:800;font-size:15px;">📋 All Entries (${entries.length})</div>
+        <button onclick="exportCSV()" style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;padding:7px 12px;color:#D4780A;font-weight:700;font-size:12px;cursor:pointer;">⬇ CSV</button>
+      </div>
+      ${entries.length===0
+        ?'<div style="text-align:center;color:#92714A;padding:40px 20px;"><div style="font-size:40px;">📋</div><div style="font-weight:700;margin-top:8px;">No entries yet</div></div>'
+        :[...entries].sort((a,b)=>b.date.localeCompare(a.date)).map(e=>{
+          const c=calc(e);
+          return `<div style="background:#fff;border:1.5px solid #E8D5B7;border-radius:12px;padding:12px 13px;margin-bottom:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+              <div>
+                <div style="font-weight:800;font-size:13px;">${e.date}</div>
+                <div style="font-size:11px;color:#92714A;margin-top:2px;">🫓 ${e.samosasSold} pcs @ K${e.pricePerSamosa}</div>
+              </div>
+              <span style="font-weight:900;color:${c.profit>=0?'#15803D':'#B91C1C'};font-size:15px;">${c.profit>=0?'+':''}${fmt(c.profit)}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:9px;">
+              ${miniStat('Revenue',fmt(c.revenue),'#D4780A')}
+              ${miniStat('Capital',fmt(c.capital),'#92714A')}
+              ${miniStat(c.profit>=0?'Profit':'Loss',fmt(Math.abs(c.profit)),c.profit>=0?'#15803D':'#B91C1C')}
+            </div>
+            ${e.note?`<div style="font-size:11px;color:#92714A;margin-top:6px;font-style:italic;">"${e.note}"</div>`:''}
+            <div style="display:flex;gap:7px;margin-top:9px;">
+              <button onclick="editEntry('${e.id}')" style="flex:1;padding:7px;background:#FEF3C7;border:1px solid #F59E0B;border-radius:8px;font-weight:700;color:#D4780A;font-size:12px;cursor:pointer;">✏️ Edit</button>
+              <button onclick="deleteEntry('${e.id}')" style="flex:1;padding:7px;background:#FEE2E2;border:1px solid #FECACA;border-radius:8px;font-weight:700;color:#B91C1C;font-size:12px;cursor:pointer;">🗑️ Delete</button>
+            </div>
+          </div>`;
+        }).join('')
+      }
+    `:''}
+    </div>
+  </div>`;
+
+  if(currentTab==='entry') updateLive();
+}
+
+// ── UI Helpers ─────────────────────────────────────────────────────────────
+function card(icon,label,value,color,bg,sub){
+  return `<div style="background:${bg||'#fff'};border:1.5px solid #E8D5B7;border-radius:14px;padding:14px 15px;min-width:0;flex:1;">
+    <div style="font-size:19px;">${icon}</div>
+    <div style="color:#92714A;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;margin-top:4px;">${label}</div>
+    <div style="color:${color||'#2C1A0E'};font-size:18px;font-weight:800;margin-top:2px;">${value}</div>
+    ${sub?`<div style="color:#92714A;font-size:10px;margin-top:2px;">${sub}</div>`:''}
+  </div>`;
+}
+
+function miniStat(label,value,color){
+  return `<div style="background:#FFF8EE;border-radius:8px;padding:7px 8px;">
+    <div style="font-size:9px;color:#92714A;font-weight:700;text-transform:uppercase;">${label}</div>
+    <div style="font-size:12px;font-weight:800;color:${color};margin-top:1px;">${value}</div>
+  </div>`;
+}
+
+function profitBar(profit,revenue,height){
+  const pct=revenue>0?Math.min(Math.max((profit/revenue)*100,-100),100):0;
+  const bg=profit>=0?'linear-gradient(90deg,#F59E0B,#15803D)':'linear-gradient(90deg,#B91C1C,#F97316)';
+  return `<div style="background:#E8D5B7;border-radius:99px;height:${height}px;overflow:hidden;">
+    <div style="height:100%;border-radius:99px;width:${Math.abs(pct)}%;background:${bg};"></div>
+  </div>`;
+}
+
+function field(id,label,type,placeholder){
+  const val = editId ? (currentFormData[id]||'') : '';
+  return `<div style="margin-bottom:11px;">
+    <label style="display:block;font-size:11px;font-weight:700;color:#92714A;margin-bottom:3px;text-transform:uppercase;letter-spacing:0.5px;">${label}</label>
+    <input type="${type}" id="f_${id}" value="${val}" placeholder="${placeholder||''}" oninput="updateLive()" onchange="updateLive()"
+      style="width:100%;padding:10px 12px;border:1.5px solid #E8D5B7;border-radius:10px;font-size:14px;background:#fff;color:#2C1A0E;outline:none;">
+  </div>`;
+}
+
+function getFormVal(f){ return document.getElementById('f_'+f)?document.getElementById('f_'+f).value:''; }
+
+function updateLive(){
+  const sold=n(getFormVal('samosasSold')), price=n(getFormVal('pricePerSamosa'));
+  const flour=n(getFormVal('flourCost')), oil=n(getFormVal('oilCost')), mv=n(getFormVal('meatVegCost')), pkg=n(getFormVal('packagingCost')), other=n(getFormVal('otherCosts'));
+  const revenue=sold*price, capital=flour+oil+mv+pkg+other, profit=revenue-capital;
+  const lp=document.getElementById('livePreview');
+  if(!lp)return;
+  if(sold>0||flour>0){
+    lp.innerHTML=`<div style="background:#FEF3C7;border:1.5px solid #F59E0B;border-radius:14px;padding:12px 13px;margin-bottom:12px;">
+      <div style="font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:7px;">Live Preview</div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:13px;"><span style="color:#92714A;">Revenue</span><span style="font-weight:700;color:#D4780A;">${fmt(revenue)}</span></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:13px;"><span style="color:#92714A;">Total Capital</span><span style="font-weight:700;color:#2C1A0E;">${fmt(capital)}</span></div>
+      <div style="border-top:1.5px solid #E8D5B7;margin-top:7px;padding-top:7px;display:flex;justify-content:space-between;">
+        <span style="font-weight:800;font-size:13px;">${profit>=0?'Profit':'Loss'}</span>
+        <span style="font-weight:900;font-size:16px;color:${profit>=0?'#15803D':'#B91C1C'};">${profit>=0?'+':''}${fmt(profit)}</span>
+      </div>
+    </div>`;
+  } else { lp.innerHTML=''; }
+}
+
+// ── Form data for edit ─────────────────────────────────────────────────────
+let currentFormData = {};
+
+// ── Actions ────────────────────────────────────────────────────────────────
+function switchTab(t){ currentTab=t; if(t!=='entry'){editId=null;currentFormData={};} render(); }
+function setSummaryMode(m){ summaryMode=m; render(); }
+function setChartMode(m){ chartMode=m; render(); }
+
+function saveEntry(){
+  const data={
+    date:getFormVal('date')||today(),
+    samosasSold:getFormVal('samosasSold'),
+    pricePerSamosa:getFormVal('pricePerSamosa'),
+    flourCost:getFormVal('flourCost'),
+    oilCost:getFormVal('oilCost'),
+    meatVegCost:getFormVal('meatVegCost'),
+    packagingCost:getFormVal('packagingCost'),
+    otherCosts:getFormVal('otherCosts'),
+    note:getFormVal('note'),
+  };
+  if(!data.samosasSold||!data.pricePerSamosa){toast('Enter samosas sold and price.',true);return;}
+  if(editId){
+    entries=entries.map(e=>e.id===editId?{...data,id:editId}:e);
+    toast('Entry updated!');
+  } else {
+    entries=[{...data,id:Date.now().toString()},...entries];
+    toast('Sale recorded!');
+  }
+  save(); editId=null; currentFormData={}; currentTab='dashboard'; render();
+}
+
+function editEntry(id){
+  const e=entries.find(e=>e.id===id);
+  if(!e)return;
+  editId=id; currentFormData={...e}; currentTab='entry'; render();
+}
+
+function deleteEntry(id){
+  if(!confirm('Delete this entry?'))return;
+  entries=entries.filter(e=>e.id!==id);
+  save(); toast('Entry deleted.'); render();
+}
+
+function cancelForm(){ editId=null; currentFormData={}; currentTab='dashboard'; render(); }
+
+function exportCSV(){
+  const header='Date,Samosas Sold,Price/Samosa,Revenue,Flour,Oil,Meat/Veg,Packaging,Other Costs,Total Capital,Profit/Loss,Note';
+  const rows=[...entries].sort((a,b)=>a.date.localeCompare(b.date)).map(e=>{
+    const c=calc(e);
+    return[e.date,e.samosasSold,e.pricePerSamosa,c.revenue.toFixed(2),e.flourCost||0,e.oilCost||0,e.meatVegCost||0,e.packagingCost||0,e.otherCosts||0,c.capital.toFixed(2),c.profit.toFixed(2),'"'+(e.note||'')+'"'].join(',');
+  });
+  const blob=new Blob([[header,...rows].join('\n')],{type:'text/csv'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download='samosa_sales.csv';a.click();
+  URL.revokeObjectURL(url); toast('CSV downloaded!');
+}
+
+// ── Start ──────────────────────────────────────────────────────────────────
+render();
+</script>
+</body>
+</html>
